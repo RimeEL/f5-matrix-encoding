@@ -1,0 +1,15 @@
+# Environnement virtuel
+venv/
+
+# Fichiers Python compilés
+__pycache__/
+*.pyc
+*.pyo
+
+# Fichiers système
+.DS_Store
+Thumbs.db
+
+# Fichiers de test générés
+images/reconstructed_test.jpg
+images/output_test.jpg
