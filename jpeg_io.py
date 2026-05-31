@@ -77,19 +77,23 @@ def get_ac_coefficients(dct_blocks):
     """
     ac_values = []
     ac_positions = []
-    
+    nonzero_count = 0
+
     for block_idx, block in enumerate(dct_blocks):
         for r in range(8):
             for c in range(8):
                 if r == 0 and c == 0:
                     continue  # Saute le coefficient DC
                 val = block[r, c]
-                if val != 0:  # Seulement les non-nuls
-                    ac_values.append(val)
-                    ac_positions.append((block_idx, r, c))
-    
-    print(f"[get_ac] Coefficients AC non-nuls extraits : {len(ac_values)}")
-    return ac_values, ac_positions
+                # On enregistre toutes les positions AC (y compris les zéros)
+                ac_values.append(int(val))
+                ac_positions.append((block_idx, r, c))
+                if val != 0:
+                    nonzero_count += 1
+
+    print(f"[get_ac] Coefficients AC extraits (tous) : {len(ac_values)}")
+    print(f"[get_ac] Coefficients AC non-nuls extraits : {nonzero_count}")
+    return ac_values, ac_positions, nonzero_count
 
 
 def save_jpeg(path, dct_blocks, block_positions, original_shape):
