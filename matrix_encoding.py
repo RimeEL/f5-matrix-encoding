@@ -104,18 +104,28 @@ def encode_block(coeffs, message_bits, w):
     target_lsb = 1 - current_lsb  # On veut l'opposé
     
     if val > 0:
-        new_val = val - 1
+        # Essayer de diminuer pour changer le LSB
+        cand = val - 1
+        if cand == 0:
+            # Éviter le shrinkage → augmenter à la place
+            cand = val + 1
     elif val < 0:
-        new_val = val + 1
+        cand = val + 1
+        if cand == 0:
+            cand = val - 1
     else:
-        # val == 0, ne devrait pas arriver (on travaille sur non-nuls)
-        return list(coeffs), 0, True
-    
-    # Vérification du shrinkage
-    if new_val == 0:
-        return list(coeffs), 0, True  # Shrinkage : on skip ce bloc
-    
-    new_coeffs[pos_to_modify] = new_val
+        # val == 0 : permettre de créer une valeur non-nulle (par ex. 1)
+        # afin de pouvoir modifier le LSB même si le coefficient était zéro.
+        # On choisit 1 pour obtenir un LSB à 1 (si nécessaire).
+        if target_lsb == 1:
+            cand = 1
+        else:
+            cand = 2
+
+    new_coeffs[pos_to_modify] = cand
+    return new_coeffs, 1, False
+
+    new_coeffs[pos_to_modify] = cand
     return new_coeffs, 1, False
 
 

@@ -45,7 +45,9 @@ def embed(cover_image_path, payload_path, output_path, password):
         return False
     
     # ─── ÉTAPE 4 : Shuffling ──────────────────────────────────
-    print("\n[F5] Étape 4 : Shuffling des coefficients...")
+    print("\n[F5] Étape 4 : Shuffling des coefficients (tous les AC pour permutation stable)...")
+    # Créer une permutation basée sur la liste complète des positions AC
+    # (inclut les zéros) pour garantir une mapping stable après recompression
     shuffled_vals, shuffled_pos, mapping = shuffle_coefficients(
         ac_values, ac_positions, password
     )
@@ -63,23 +65,24 @@ def embed(cover_image_path, payload_path, output_path, password):
     for i in range(31, -1, -1):
         header_bits.append((total_bits >> i) & 1)
     
-    # Embedding du header en LSB simple (pas de matrix encoding)
+    # Embedding du header sur coefficients stables (|val| >= 3)
     header_idx = 0
     coeff_idx = 0
-    
+    header_positions = []
+
     while header_idx < len(header_bits) and coeff_idx < len(shuffled_vals):
         val = shuffled_vals[coeff_idx]
-        bit = header_bits[header_idx]
-        
-        new_val = set_lsb(val, bit)
-        if new_val is not None:
-            shuffled_vals[coeff_idx] = new_val
-            header_idx += 1
-        # Si shrinkage, on saute ce coefficient
+        if abs(val) >= 20:          # seulement les coefficients très stables
+            bit = header_bits[header_idx]
+            new_val = set_lsb(val, bit)
+            if new_val is not None:
+                shuffled_vals[coeff_idx] = new_val
+                header_positions.append(coeff_idx)
+                header_idx += 1
         coeff_idx += 1
-    
-    header_end_idx = coeff_idx  # Index où commence le payload réel
-    print(f"[F5] Header embedé sur les {header_end_idx} premiers coefficients")
+
+    header_end_idx = coeff_idx
+    print(f"[F5] Header embedé sur {len(header_positions)} coefficients (|val|>=20), dernier index scanné {header_end_idx}")
     
     # ─── ÉTAPE 6 : Embedding du message avec Matrix Encoding ──
     print(f"\n[F5] Étape 6 : Embedding du message avec Matrix Encoding (w={w})...")
@@ -89,29 +92,30 @@ def embed(cover_image_path, payload_path, output_path, password):
     nb_blocks = 0
     nb_modifications = 0
     nb_shrinkages = 0
-    
-    while payload_idx < total_bits and coeff_idx + n <= len(shuffled_vals):
+
+    # Utiliser blocs contigus de longueur n immédiatement après le header.
+    total_len = len(shuffled_vals)
+    coeff_idx = header_end_idx
+    while payload_idx < total_bits and coeff_idx + n <= total_len:
+        coeffs_block = shuffled_vals[coeff_idx:coeff_idx + n]
+
         # Prendre w bits du message
         msg_block = payload_bits[payload_idx:payload_idx + w]
         if len(msg_block) < w:
-            # Padding si nécessaire
             msg_block = msg_block + [0] * (w - len(msg_block))
-        
-        # Prendre n coefficients
-        coeffs_block = shuffled_vals[coeff_idx:coeff_idx + n]
-        
+
         # Encoder avec Matrix Encoding
         new_coeffs, changes, shrinkage = encode_block(coeffs_block, msg_block, w)
-        
+
         if shrinkage:
             nb_shrinkages += 1
-            coeff_idx += 1  # Saute 1 coefficient et réessaie
+            coeff_idx += 1
             continue
-        
+
         # Mettre à jour les coefficients
         for k in range(n):
             shuffled_vals[coeff_idx + k] = new_coeffs[k]
-        
+
         nb_modifications += changes
         nb_blocks += 1
         payload_idx += w
@@ -166,7 +170,8 @@ def extract(stego_image_path, output_path, password):
     ac_values, ac_positions, ac_nonzero = get_ac_coefficients(dct_blocks)
     
     # ─── ÉTAPE 2 : Shuffling avec le même mot de passe ────────
-    print("\n[F5] Étape 2 : Shuffling avec le mot de passe...")
+    print("\n[F5] Étape 2 : Shuffling avec le mot de passe (permutation sur tous les AC)...")
+    # Utiliser la même permutation déterministe sur la liste complète des AC
     shuffled_vals, shuffled_pos, mapping = shuffle_coefficients(
         ac_values, ac_positions, password
     )
@@ -176,13 +181,15 @@ def extract(stego_image_path, output_path, password):
     
     header_bits = []
     coeff_idx = 0
-    
+    header_positions = []
+
     while len(header_bits) < 40 and coeff_idx < len(shuffled_vals):
         val = shuffled_vals[coeff_idx]
-        if val != 0:
+        if abs(val) >= 20:          # même condition qu'à l'embedding (coefficients très stables)
             header_bits.append(abs(val) % 2)
+            header_positions.append(coeff_idx)
         coeff_idx += 1
-    
+
     header_end_idx = coeff_idx
     
     # Décoder w (8 premiers bits)
@@ -204,12 +211,12 @@ def extract(stego_image_path, output_path, password):
     
     extracted_bits = []
     coeff_idx = header_end_idx
-    
-    while len(extracted_bits) < total_bits and coeff_idx + n <= len(shuffled_vals):
-        # Prendre n coefficients
+
+    # Extraction : utiliser les mêmes blocs contigus que l'embedding
+    total_len = len(shuffled_vals)
+    coeff_idx = header_end_idx
+    while len(extracted_bits) < total_bits and coeff_idx + n <= total_len:
         coeffs_block = shuffled_vals[coeff_idx:coeff_idx + n]
-        
-        # Décoder avec Matrix Encoding
         msg_bits = decode_block(coeffs_block, w)
         extracted_bits.extend(msg_bits)
         coeff_idx += n
@@ -218,6 +225,23 @@ def extract(stego_image_path, output_path, password):
     extracted_bits = extracted_bits[:total_bits]
     
     print(f"[F5] Bits extraits : {len(extracted_bits)}")
+    # Dump des bits extraits pour debug (écrit en bytes, padding sur le dernier octet)
+    try:
+        out_bits_path = "images/extracted_bits.bin"
+        b = bytearray()
+        for i in range(0, len(extracted_bits), 8):
+            byte = 0
+            chunk = extracted_bits[i:i+8]
+            for bit in chunk:
+                byte = (byte << 1) | bit
+            # si chunk < 8, left-shift pour compléter octet (équivaut à padding zeros à droite)
+            byte = byte << (8 - len(chunk)) if len(chunk) < 8 else byte
+            b.append(byte)
+        with open(out_bits_path, 'wb') as f:
+            f.write(b)
+        print(f"[F5] Dump bits extraits sauvegardé : {out_bits_path} ({len(b)} octets)")
+    except Exception as e:
+        print(f"[F5] Impossible d'écrire extracted_bits.bin : {e}")
     
     # ─── ÉTAPE 5 : Reconstruire le fichier ────────────────────
     print("\n[F5] Étape 5 : Reconstruction du fichier...")
